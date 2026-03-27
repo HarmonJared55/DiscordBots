@@ -83,6 +83,22 @@ public class CommendRepository
     }
 
     /// <summary>
+    /// Gets the top commended users, ranked by total number of commends received.
+    /// Returns a list of (UserId, CommendCount) tuples.
+    /// </summary>
+    public async Task<List<(ulong UserId, int CommendCount)>> GetTopCommendedUsersAsync(int count = 5)
+    {
+        var results = await _context.Commends
+            .GroupBy(c => c.UserId)
+            .Select(g => new { UserId = g.Key, CommendCount = g.Count() })
+            .OrderByDescending(x => x.CommendCount)
+            .Take(count)
+            .ToListAsync();
+
+        return results.Select(r => (r.UserId, r.CommendCount)).ToList();
+    }
+
+    /// <summary>
     /// Deletes a commend by its primary key. Returns true if found and deleted.
     /// </summary>
     public async Task<bool> DeleteAsync(int id)
