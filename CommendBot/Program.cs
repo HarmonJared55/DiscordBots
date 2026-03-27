@@ -41,6 +41,10 @@ using (var initContext = new CommendBotDbContext(dbOptions))
 // Create a shared HttpClient for the Foxhole API
 var httpClient = new HttpClient();
 
+// Cache for Foxhole API responses (ETag-based)
+string? cachedWarETag = null;
+int? cachedWarNumber = null;
+
 // Configure the Discord client
 var discordConfig = new DiscordSocketConfig
 {
@@ -281,23 +285,52 @@ async Task<int?> GetCurrentWarNumberAsync()
 {
     try
     {
-        var response = await httpClient.GetAsync("https://war-service-live.foxholeservices.com/api/worldconquest");
+        var request = new HttpRequestMessage(HttpMethod.Get, "https://war-service-live.foxholeservices.com/api/worldconquest");
+
+        // Send the cached ETag to avoid redundant data transfer
+        if (cachedWarETag is not null)
+        {
+            request.Headers.IfNoneMatch.Add(new System.Net.Http.Headers.EntityTagHeaderValue(cachedWarETag));
+        }
+
+        var response = await httpClient.SendAsync(request);
+
+        // 304 Not Modified — data hasn't changed, return cached value
+        if (response.StatusCode == System.Net.HttpStatusCode.NotModified)
+        {
+            Console.WriteLine("Foxhole API: 304 Not Modified — using cached war number.");
+            return cachedWarNumber;
+        }
+
         response.EnsureSuccessStatusCode();
+
+        // Update cached ETag from response header
+        if (response.Headers.ETag is not null)
+        {
+            cachedWarETag = response.Headers.ETag.Tag;
+        }
 
         var json = await response.Content.ReadAsStringAsync();
         using var doc = JsonDocument.Parse(json);
 
         if (doc.RootElement.TryGetProperty("warNumber", out var warNumberElement))
         {
-            return warNumberElement.GetInt32();
+            cachedWarNumber = warNumberElement.GetInt32();
+            Console.WriteLine($"Foxhole API: Fetched war number {cachedWarNumber} (ETag: {cachedWarETag}).");
+            return cachedWarNumber;
         }
 
         Console.WriteLine("Warning: 'warNumber' not found in Foxhole API response.");
-        return null;
+        return cachedWarNumber;
     }
     catch (Exception ex)
     {
         Console.WriteLine($"Warning: Failed to fetch current war number from Foxhole API: {ex.Message}");
-        return null;
+        // Fall back to cached value if available
+        if (cachedWarNumber is not null)
+        {
+            Console.WriteLine($"Using previously cached war number: {cachedWarNumber}.");
+        }
+        return cachedWarNumber;
     }
 }
