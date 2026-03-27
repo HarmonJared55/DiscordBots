@@ -33,8 +33,8 @@ var dbOptions = new DbContextOptionsBuilder<CommendBotDbContext>()
 // Ensure the database and tables are created
 using (var initContext = new CommendBotDbContext(dbOptions))
 {
-    await initContext.Database.EnsureCreatedAsync();
-    Console.WriteLine("Database connection established and schema ensured.");
+    await initContext.Database.MigrateAsync();
+    Console.WriteLine("Database migrated and connection established.");
 }
 
 // Configure the Discord client
@@ -96,8 +96,6 @@ async Task ReadyAsync()
             Console.WriteLine($"Failed to register command: {ex.Message}");
         }
     }
-
-     
 }
 
 async Task SlashCommandExecutedAsync(SocketSlashCommand command)
