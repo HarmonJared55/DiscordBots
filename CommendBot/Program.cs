@@ -1,5 +1,6 @@
 ﻿using System.Reflection;
 using System.Text.Json;
+using Azure.Identity;
 using CommendBod.Model;
 using CommendBot.Data;
 using Discord;
@@ -7,13 +8,29 @@ using Discord.Net;
 using Discord.WebSocket;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Configuration.EnvironmentVariables;
 
 // Load configuration
-var config = new ConfigurationBuilder()
+var configBuilder = new ConfigurationBuilder()
     .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
-    .AddUserSecrets(Assembly.GetExecutingAssembly())
-    .Build();
+    .AddEnvironmentVariables()
+    .AddUserSecrets(Assembly.GetExecutingAssembly(), optional: true);
+
+// Build an initial config to read the Key Vault URI
+var initialConfig = configBuilder.Build();
+
+// If a Key Vault URI is configured, add it as a configuration source.
+// Secrets in Key Vault use '--' as separator (e.g. "Discord--Token" maps to "Discord:Token").
+// Uses DefaultAzureCredential which supports managed identity (ACI) and local dev credentials.
+var vaultUri = initialConfig["KeyVault:VaultUri"];
+if (!string.IsNullOrEmpty(vaultUri))
+{
+    Console.WriteLine($"Azure Key Vault configured: {vaultUri}");
+    configBuilder.AddAzureKeyVault(new Uri(vaultUri), new DefaultAzureCredential());
+}
+
+var config = configBuilder.Build();
 
 var token = config["Discord:Token"]
     ?? throw new InvalidOperationException("Bot token not found. Set 'Discord:Token' in appsettings.json.");

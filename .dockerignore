@@ -1,0 +1,17 @@
+**/.vs
+**/.vscode
+**/bin
+**/obj
+**/Migrations
+**/.git
+**/.gitignore
+**/node_modules
+**/*.user
+**/*.suo
+**/launchSettings.json
+**/secrets.json
+**/appsettings.Development.json
+**/Thumbs.db
+**/.DS_Store
+README.md
+LICENSE
