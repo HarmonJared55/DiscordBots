@@ -77,18 +77,33 @@ public class CommendRepository
         existing.Reason = commend.Reason;
         existing.SentByUserId = commend.SentByUserId;
         existing.CreatedDate = commend.CreatedDate;
+        existing.WarRole = commend.WarRole;
+        existing.WarNumber = commend.WarNumber;
 
         await _context.SaveChangesAsync();
         return existing;
     }
 
     /// <summary>
-    /// Gets the top commended users, ranked by total number of commends received.
+    /// Gets the top commended users with optional war role and war number filters.
     /// Returns a list of (UserId, CommendCount) tuples.
     /// </summary>
-    public async Task<List<(ulong UserId, int CommendCount)>> GetTopCommendedUsersAsync(int count = 5)
+    public async Task<List<(ulong UserId, int CommendCount)>> GetTopCommendedUsersAsync(
+        int count = 5, string? warRole = null, int? warNumber = null)
     {
-        var results = await _context.Commends
+        var query = _context.Commends.AsQueryable();
+
+        if (warRole is not null)
+        {
+            query = query.Where(c => c.WarRole != null && c.WarRole.ToLower() == warRole.ToLower());
+        }
+
+        if (warNumber is not null)
+        {
+            query = query.Where(c => c.WarNumber == warNumber);
+        }
+
+        var results = await query
             .GroupBy(c => c.UserId)
             .Select(g => new { UserId = g.Key, CommendCount = g.Count() })
             .OrderByDescending(x => x.CommendCount)

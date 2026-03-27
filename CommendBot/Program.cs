@@ -1,4 +1,5 @@
 ﻿using System.Reflection;
+using System.Text.Json;
 using CommendBod.Model;
 using CommendBot.Data;
 using Discord;
@@ -36,6 +37,9 @@ using (var initContext = new CommendBotDbContext(dbOptions))
     await initContext.Database.MigrateAsync();
     Console.WriteLine("Database migrated and connection established.");
 }
+
+// Create a shared HttpClient for the Foxhole API
+var httpClient = new HttpClient();
 
 // Configure the Discord client
 var discordConfig = new DiscordSocketConfig
@@ -86,11 +90,14 @@ async Task ReadyAsync()
             .WithDescription("Commend a user for valor on the battlefield")
             .AddOption("user", ApplicationCommandOptionType.User, "The user to commend", isRequired: true)
             .AddOption("reason", ApplicationCommandOptionType.String, "The reason for the commendation", isRequired: false)
-            .AddOption("role", ApplicationCommandOptionType.Role, "The role to assign for this commendation", isRequired: false),
+            .AddOption("role", ApplicationCommandOptionType.Role, "The role to assign for this commendation", isRequired: false)
+            .AddOption("war-number", ApplicationCommandOptionType.Integer, "The war number (auto-detected if not provided)", isRequired: false),
 
         new SlashCommandBuilder()
             .WithName("leaderboard")
             .WithDescription("Display the top 5 most commended users")
+            .AddOption("role", ApplicationCommandOptionType.Role, "Filter by war role", isRequired: false)
+            .AddOption("war-number", ApplicationCommandOptionType.Integer, "Filter by war number", isRequired: false)
     ];
 
     foreach (var commandBuilder in slashCommandBuilders)
@@ -135,6 +142,7 @@ async Task HandleCommendCommandAsync(SocketSlashCommand command)
     var userOption = command.Data.Options.FirstOrDefault(opt => opt.Name == "user");
     var reasonOption = command.Data.Options.FirstOrDefault(opt => opt.Name == "reason");
     var roleOption = command.Data.Options.FirstOrDefault(opt => opt.Name == "role");
+    var warNumberOption = command.Data.Options.FirstOrDefault(opt => opt.Name == "war-number");
 
     if (userOption is null)
     {
@@ -145,6 +153,13 @@ async Task HandleCommendCommandAsync(SocketSlashCommand command)
     var user = (SocketGuildUser)userOption.Value;
     var reason = reasonOption?.Value as string ?? "No reason provided.";
     var role = roleOption?.Value as SocketRole;
+
+    // Determine war number: use provided value or fetch from Foxhole API
+    int? warNumber = warNumberOption is not null ? Convert.ToInt32(warNumberOption.Value) : null;
+    if (warNumber is null)
+    {
+        warNumber = await GetCurrentWarNumberAsync();
+    }
 
     // Save the commendation to the database
     try
@@ -157,17 +172,17 @@ async Task HandleCommendCommandAsync(SocketSlashCommand command)
             UserId = user.Id,
             Reason = reason,
             SentByUserId = command.User.Id,
-            CreatedDate = DateTime.UtcNow
+            CreatedDate = DateTime.UtcNow,
+            WarRole = role?.Name,
+            WarNumber = warNumber
         };
 
         await repository.CreateAsync(commend);
 
-        string responseMessage = $"Commended {user.Mention} for valor on the battlefield performing their role of {role?.Name}! Reason: {reason}";
-        //if (role != null)
-        //{
-        //    responseMessage += $" Assigned role: {role.Mention}";
-        //    await user.AddRoleAsync(role);
-        //}
+        string roleText = role is not null ? $" performing their role of **{role.Name}**" : "";
+        string warText = warNumber is not null ? $" during **War {warNumber}**" : "";
+        string responseMessage = $"Commended {user.Mention} for valor on the battlefield{roleText}{warText}! Reason: {reason}";
+
         await command.RespondAsync(responseMessage);
     }
     catch (Exception ex)
@@ -184,19 +199,50 @@ async Task HandleLeaderboardCommandAsync(SocketSlashCommand command)
         using var dbContext = new CommendBotDbContext(dbOptions);
         var repository = new CommendRepository(dbContext);
 
-        var topUsers = await repository.GetTopCommendedUsersAsync(5);
+        var roleOption = command.Data.Options.FirstOrDefault(opt => opt.Name == "role");
+        var warNumberOption = command.Data.Options.FirstOrDefault(opt => opt.Name == "war-number");
+
+        var role = roleOption?.Value as SocketRole;
+        var warRole = role?.Name;
+        int? warNumber = warNumberOption is not null ? Convert.ToInt32(warNumberOption.Value) : null;
+
+        var topUsers = await repository.GetTopCommendedUsersAsync(5, warRole, warNumber);
 
         if (topUsers.Count == 0)
         {
-            await command.RespondAsync("No commendations have been recorded yet. Be the first to commend someone!");
+            var filters = new List<string>();
+            if (warRole is not null) filters.Add($"**{warRole}** role");
+            if (warNumber is not null) filters.Add($"**War {warNumber}**");
+
+            string noDataMessage = filters.Count > 0
+                ? $"No commendations have been recorded for {string.Join(" in ", filters)} yet."
+                : "No commendations have been recorded yet. Be the first to commend someone!";
+            await command.RespondAsync(noDataMessage);
             return;
         }
 
         var guild = client.GetGuild(guildId);
 
+        // Build title and description with active filters
+        var titleParts = new List<string>();
+        if (warRole is not null) titleParts.Add(warRole);
+        if (warNumber is not null) titleParts.Add($"War {warNumber}");
+
+        string title = titleParts.Count > 0
+            ? $"🏆 Commendation Leaderboard — {string.Join(" | ", titleParts)}"
+            : "🏆 Commendation Leaderboard";
+
+        var descParts = new List<string>();
+        if (warRole is not null) descParts.Add($"the **{warRole}** role");
+        if (warNumber is not null) descParts.Add($"**War {warNumber}**");
+
+        string description = descParts.Count > 0
+            ? $"Top 5 most commended users for {string.Join(" in ", descParts)}!"
+            : "Top 5 most commended users on the battlefield!";
+
         var embed = new EmbedBuilder()
-            .WithTitle("🏆 Commendation Leaderboard")
-            .WithDescription("Top 5 most commended users on the battlefield!")
+            .WithTitle(title)
+            .WithDescription(description)
             .WithColor(Color.Gold)
             .WithTimestamp(DateTimeOffset.UtcNow);
 
@@ -226,5 +272,32 @@ async Task HandleLeaderboardCommandAsync(SocketSlashCommand command)
     {
         Console.WriteLine($"Error fetching leaderboard: {ex.Message}");
         await command.RespondAsync("An error occurred while fetching the leaderboard. Please try again later.", ephemeral: true);
+    }
+}
+
+// --- Foxhole API ---
+
+async Task<int?> GetCurrentWarNumberAsync()
+{
+    try
+    {
+        var response = await httpClient.GetAsync("https://war-service-live.foxholeservices.com/api/worldconquest");
+        response.EnsureSuccessStatusCode();
+
+        var json = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(json);
+
+        if (doc.RootElement.TryGetProperty("warNumber", out var warNumberElement))
+        {
+            return warNumberElement.GetInt32();
+        }
+
+        Console.WriteLine("Warning: 'warNumber' not found in Foxhole API response.");
+        return null;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Warning: Failed to fetch current war number from Foxhole API: {ex.Message}");
+        return null;
     }
 }

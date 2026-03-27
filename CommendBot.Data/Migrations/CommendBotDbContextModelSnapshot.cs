@@ -44,6 +44,13 @@ namespace CommendBot.Data.Migrations
                     b.Property<decimal>("UserId")
                         .HasColumnType("decimal(20,0)");
 
+                    b.Property<int?>("WarNumber")
+                        .HasColumnType("int");
+
+                    b.Property<string>("WarRole")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
                     b.HasKey("Id");
 
                     b.ToTable("Commends");

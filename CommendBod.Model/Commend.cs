@@ -22,5 +22,10 @@ namespace CommendBod.Model
 
         [Required]
         public DateTime CreatedDate { get; set; } = DateTime.UtcNow;
+
+        [MaxLength(100)]
+        public string? WarRole { get; set; }
+
+        public int? WarNumber { get; set; }
     }
 }
